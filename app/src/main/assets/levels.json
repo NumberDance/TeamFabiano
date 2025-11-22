@@ -1,0 +1,19 @@
+{
+  "levels": [
+    {
+      "rank": "White Pra Jiad",
+      "xp_required": 0,
+      "lessons": [1, 2, 3]
+    },
+    {
+      "rank": "Yellow Pra Jiad",
+      "xp_required": 100,
+      "lessons": []
+    },
+    {
+      "rank": "Blue Pra Jiad",
+      "xp_required": 200,
+      "lessons": []
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "lessons": [
+    {
+      "id": 1,
+      "title": "Lesson 1: Jump rope",
+      "description": "Learn the warmup exercise.",
+      "video_file": "lesson1.mkv",
+      "master_recording_file": "lesson_1_master.json"
+    }
+  ]
+}

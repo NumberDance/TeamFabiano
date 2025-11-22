@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">TeamFabiano</string>
+    <string name="lesson_1_title">Lesson 1</string>
+    <string name="lesson_description">Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+        Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+        Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</string>
+    <string name="start_recording">Start Recording</string>
+    <string name="stop_recording">Stop Recording</string>
+    <string name="replaying">Replaying...</string>
+    <string name="replay">Replay</string>
+    <string name="record_master">Record Master</string>
+    <string name="capture_and_validate">Capture &amp; Validate</string>
+</resources>
