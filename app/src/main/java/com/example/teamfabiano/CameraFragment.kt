@@ -37,12 +37,10 @@ import kotlin.math.sqrt
 
 class CameraFragment : Fragment() {
 
-    private var lessonId: Int = -1
-
     private enum class ValidationState {
-        IDLE,           // Waiting for user to get in position
-        COUNTDOWN,      // Countdown is active
-        VALIDATING,     // Actively comparing poses
+        IDLE,           // Looping ghost replay, waiting for user to get in position
+        COUNTDOWN,      // Countdown is active, ghost is looping
+        VALIDATING,     // Actively comparing poses with synced ghost
         SHOWING_SCORE   // Displaying final score
     }
 
@@ -71,13 +69,6 @@ class CameraFragment : Fragment() {
             }
         }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        arguments?.let {
-            lessonId = it.getInt(ARG_LESSON_ID)
-        }
-    }
-
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
         savedInstanceState: Bundle?
@@ -97,17 +88,9 @@ class CameraFragment : Fragment() {
         feedbackImageView = view.findViewById(R.id.image_feedback)
         val mainMenuButton = view.findViewById<Button>(R.id.button_main_menu)
 
-        val lessons = loadLessons()
-        val lesson = lessons.find { it.id == lessonId }
-
-        if (lesson == null) {
-            similarityScoreTextView.text = "Lesson not found."
-            return
-        }
-
-        masterRecording = loadMasterRecording(lesson.master_recording_file)
+        masterRecording = loadMasterRecording("lesson_1_master.json")
         if (masterRecording == null) {
-            similarityScoreTextView.text = "Master for ${lesson.title} not found."
+            similarityScoreTextView.text = "Master for lesson 1 not found."
         } else {
             resetValidationState()
         }
@@ -126,7 +109,6 @@ class CameraFragment : Fragment() {
 
     private fun startCountdown() {
         currentState = ValidationState.COUNTDOWN
-        stopGhostReplay()
         countdownTextView.visibility = View.VISIBLE
 
         object : CountDownTimer(5000, 1000) {
@@ -136,6 +118,7 @@ class CameraFragment : Fragment() {
 
             override fun onFinish() {
                 countdownTextView.visibility = View.GONE
+                stopGhostReplay()
                 startValidation()
             }
         }.start()
@@ -155,6 +138,8 @@ class CameraFragment : Fragment() {
     private fun stopValidation() {
         currentState = ValidationState.SHOWING_SCORE
         feedbackImageView.visibility = View.GONE
+        poseOverlayView.clearPose(isGhost = true)
+
         if (validationScores.isNotEmpty()) {
             val averageScore = validationScores.average()
             similarityScoreTextView.text = "Average Match: ${String.format("%.1f", averageScore)}%"
@@ -185,11 +170,10 @@ class CameraFragment : Fragment() {
         ghostReplayRunnable = object : Runnable {
             var frameIndex = 0
             override fun run() {
-                if (currentState != ValidationState.IDLE && currentState != ValidationState.SHOWING_SCORE) return
                 val masterPose = masterRecording!![frameIndex]
                 poseOverlayView.updateGhostPose(masterPose.landmarks, masterPose.width, masterPose.height)
                 frameIndex = (frameIndex + 1) % masterRecording!!.size
-                handler.postDelayed(this, 33)
+                handler.postDelayed(this, 33) // ~30 fps
             }
         }
         handler.post(ghostReplayRunnable!!)
@@ -197,7 +181,6 @@ class CameraFragment : Fragment() {
 
     private fun stopGhostReplay() {
         ghostReplayRunnable?.let { handler.removeCallbacks(it) }
-        poseOverlayView.clearPose(isGhost = true)
     }
 
     @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
@@ -232,8 +215,9 @@ class CameraFragment : Fragment() {
 
                             when (currentState) {
                                 ValidationState.IDLE -> checkForDistanceMatch(pose)
+                                ValidationState.COUNTDOWN -> { /* Ghost is looping, do nothing */ }
                                 ValidationState.VALIDATING -> performValidation(pose)
-                                else -> { /* Do nothing */ }
+                                else -> { /* Do nothing for score display */ }
                             }
                         }
                     }
@@ -260,8 +244,6 @@ class CameraFragment : Fragment() {
         val masterScale = getPoseScaleFromSaved(master.first().landmarks) ?: return
 
         val distancePercentage = abs(liveScale - masterScale) / masterScale
-        Log.d("CameraFragment", "Distance match: ${String.format("%.2f", distancePercentage * 100)}%")
-
         if (distancePercentage < 0.2) { // 20% threshold
             startCountdown()
         }
@@ -269,9 +251,14 @@ class CameraFragment : Fragment() {
 
     private fun performValidation(livePose: Pose) {
         val master = masterRecording ?: return
-        if (master.isEmpty()) return
+        if (master.isEmpty() || validationScores.size >= master.size) {
+            poseOverlayView.clearPose(isGhost = true)
+            return
+        }
 
-        val masterPose = master[validationScores.size % master.size]
+        val masterPose = master[validationScores.size]
+        poseOverlayView.updateGhostPose(masterPose.landmarks, masterPose.width, masterPose.height)
+
         val similarity = calculateSimilarity(livePose, masterPose)
         similarityScoreTextView.text = "Match: ${String.format("%.1f", similarity)}%"
         validationScores.add(similarity)
@@ -287,9 +274,7 @@ class CameraFragment : Fragment() {
         val leftShoulder = landmarks.find { it.landmarkType == PoseLandmark.LEFT_SHOULDER } ?: return null
         val rightShoulder = landmarks.find { it.landmarkType == PoseLandmark.RIGHT_SHOULDER } ?: return null
 
-        if (leftShoulder.inFrameLikelihood < 0.7f || rightShoulder.inFrameLikelihood < 0.7f) {
-            return null
-        }
+        if (leftShoulder.inFrameLikelihood < 0.7f || rightShoulder.inFrameLikelihood < 0.7f) return null
 
         return sqrt((leftShoulder.position3D.x - rightShoulder.position3D.x).pow(2) + (leftShoulder.position3D.y - rightShoulder.position3D.y).pow(2) + (leftShoulder.position3D.z - rightShoulder.position3D.z).pow(2))
     }
@@ -308,19 +293,7 @@ class CameraFragment : Fragment() {
             val type = object : TypeToken<List<SavedPose>>() {}.type
             Gson().fromJson(json, type)
         } catch (e: Exception) {
-            Log.e("CameraFragment", "Error loading master recording", e)
             null
-        }
-    }
-    
-    private fun loadLessons(): List<Lesson> {
-        return try {
-            val json = requireContext().assets.open("lessons.json").bufferedReader().use { it.readText() }
-            val type = object : TypeToken<Map<String, List<Lesson>>>() {}.type
-            val data: Map<String, List<Lesson>> = Gson().fromJson(json, type)
-            data["lessons"] ?: emptyList()
-        } catch (e: Exception) {
-            emptyList()
         }
     }
 
@@ -336,55 +309,64 @@ class CameraFragment : Fragment() {
     }
 
     private fun calculateSimilarity(livePose: Pose, masterPose: SavedPose): Double {
-        val liveLandmarks = livePose.allPoseLandmarks.map { 
-            SavedLandmark(it.landmarkType, it.position3D.x, it.position3D.y, it.position3D.z) 
-        }
+        val liveLandmarks = normalize(livePose.allPoseLandmarks.map { 
+            SavedLandmark(it.landmarkType, it.position3D.x, it.position3D.y, it.position3D.z, it.inFrameLikelihood)
+        }) ?: return 0.0
+        val masterLandmarks = normalize(masterPose.landmarks) ?: return 0.0
 
-        val normalizedLive = normalize(liveLandmarks) ?: return 0.0
-        val normalizedMaster = normalize(masterPose.landmarks) ?: return 0.0
-
-        var totalDistance = 0.0
+        // This is a tunable value. A lower value is stricter, a higher value is more forgiving.
+        val maxAcceptableDistance = 0.5 
+        var totalScore = 0.0
         var landmarkCount = 0
 
-        for (liveLm in normalizedLive) {
-            normalizedMaster.find { it.type == liveLm.type }?.let { masterLm ->
-                val dist = sqrt(
+        for (masterLm in masterLandmarks) {
+            if (!isMajorLandmark(masterLm.type)) continue
+            landmarkCount++
+
+            liveLandmarks.find { it.type == masterLm.type }?.let { liveLm ->
+                val distance = sqrt(
                     (liveLm.x - masterLm.x).pow(2) +
-                            (liveLm.y - masterLm.y).pow(2) +
-                            (liveLm.z - masterLm.z).pow(2)
+                    (liveLm.y - masterLm.y).pow(2) +
+                    (liveLm.z - masterLm.z).pow(2)
                 )
-                totalDistance += dist
-                landmarkCount++
+                
+                // The score for a single joint is 1 if distance is 0, and decreases to 0 as it approaches maxAcceptableDistance.
+                val score = (1.0 - (distance / maxAcceptableDistance)).coerceIn(0.0, 1.0)
+                totalScore += score
             }
         }
 
-        if (landmarkCount == 0) return 0.0
+        return if (landmarkCount > 0) (totalScore / landmarkCount) * 100 else 0.0
+    }
 
-        val averageDistance = totalDistance / landmarkCount
-        val similarity = (1.0 - (averageDistance / 0.5)).coerceIn(0.0, 1.0) * 100
-        return similarity
+    private fun isMajorLandmark(type: Int): Boolean {
+        return when (type) {
+            PoseLandmark.LEFT_SHOULDER, PoseLandmark.RIGHT_SHOULDER,
+            PoseLandmark.LEFT_ELBOW, PoseLandmark.RIGHT_ELBOW,
+            PoseLandmark.LEFT_WRIST, PoseLandmark.RIGHT_WRIST,
+            PoseLandmark.LEFT_HIP, PoseLandmark.RIGHT_HIP,
+            PoseLandmark.LEFT_KNEE, PoseLandmark.RIGHT_KNEE,
+            PoseLandmark.LEFT_ANKLE, PoseLandmark.RIGHT_ANKLE -> true
+            else -> false
+        }
     }
 
     private fun normalize(landmarks: List<SavedLandmark>): List<SavedLandmark>? {
-        val leftShoulder = landmarks.find { it.type == PoseLandmark.LEFT_SHOULDER } ?: return null
-        val rightShoulder = landmarks.find { it.type == PoseLandmark.RIGHT_SHOULDER } ?: return null
+        val leftShoulder = landmarks.find { it.type == PoseLandmark.LEFT_SHOULDER && (it.likelihood ?: 1.0f) > 0.7f } ?: return null
+        val rightShoulder = landmarks.find { it.type == PoseLandmark.RIGHT_SHOULDER && (it.likelihood ?: 1.0f) > 0.7f } ?: return null
 
         val centerX = (leftShoulder.x + rightShoulder.x) / 2
         val centerY = (leftShoulder.y + rightShoulder.y) / 2
         val centerZ = (leftShoulder.z + rightShoulder.z) / 2
 
-        val scale = sqrt(
-            (leftShoulder.x - rightShoulder.x).pow(2) +
-                    (leftShoulder.y - rightShoulder.y).pow(2) +
-                    (leftShoulder.z - rightShoulder.z).pow(2)
-        )
+        val scale = sqrt((leftShoulder.x - rightShoulder.x).pow(2) + (leftShoulder.y - rightShoulder.y).pow(2) + (leftShoulder.z - rightShoulder.z).pow(2))
         if (scale < 1e-6) return null
 
         return landmarks.map {
             val normalizedX = (it.x - centerX) / scale
             val normalizedY = (it.y - centerY) / scale
             val normalizedZ = (it.z - centerZ) / scale
-            SavedLandmark(it.type, normalizedX, normalizedY, normalizedZ)
+            SavedLandmark(it.type, normalizedX, normalizedY, normalizedZ, it.likelihood)
         }
     }
 
@@ -395,32 +377,12 @@ class CameraFragment : Fragment() {
         cameraProvider?.unbindAll()
     }
 
-    data class RecordedPose(
-        val landmarks: List<PoseLandmark>,
-        val frameWidth: Int,
-        val frameHeight: Int
-    )
-
-    data class SavedLandmark(
-        val type: Int,
-        val x: Float,
-        val y: Float,
-        val z: Float
-    )
-
-    data class SavedPose(
-        val landmarks: List<SavedLandmark>,
-        val width: Int,
-        val height: Int
-    )
+    data class RecordedPose(val landmarks: List<PoseLandmark>, val frameWidth: Int, val frameHeight: Int)
+    data class SavedLandmark(val type: Int, val x: Float, val y: Float, val z: Float, val likelihood: Float? = 1.0f)
+    data class SavedPose(val landmarks: List<SavedLandmark>, val width: Int, val height: Int)
 
     companion object {
         private const val ARG_LESSON_ID = "lesson_id"
-
-        fun newInstance(lessonId: Int) = CameraFragment().apply {
-            arguments = Bundle().apply {
-                putInt(ARG_LESSON_ID, lessonId)
-            }
-        }
+        fun newInstance(lessonId: Int) = CameraFragment().apply { arguments = Bundle().apply { putInt(ARG_LESSON_ID, lessonId) } }
     }
 }

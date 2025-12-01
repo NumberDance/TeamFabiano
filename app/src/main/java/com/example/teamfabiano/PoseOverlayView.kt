@@ -4,7 +4,7 @@ import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
 import android.view.View
-import com.example.teamfabiano.CameraFragment.SavedLandmark // Important: Import the nested class
+import com.example.teamfabiano.CameraFragment.SavedLandmark
 import com.google.mlkit.vision.pose.PoseLandmark
 
 class PoseOverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
@@ -17,7 +17,25 @@ class PoseOverlayView(context: Context, attrs: AttributeSet?) : View(context, at
     private var viewHeight = 1
     private val alpha = 0.3f
 
-    // Takes live data from ML Kit
+    // --- Paint Objects ---
+    private val ghostPaint = Paint().apply {
+        color = Color.BLACK
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
+    private val livePaint = Paint().apply {
+        color = Color.BLUE
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
+    private val limbPaint = Paint().apply {
+        strokeCap = Paint.Cap.ROUND
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
     fun updateLivePose(landmarks: List<PoseLandmark>, width: Int, height: Int) {
         updateSmoothedPoints(
             landmarks.map { PointF(it.position.x, it.position.y) },
@@ -29,12 +47,11 @@ class PoseOverlayView(context: Context, attrs: AttributeSet?) : View(context, at
         invalidate()
     }
 
-    // Takes data from our saved JSON file
     fun updateGhostPose(landmarks: List<SavedLandmark>, width: Int, height: Int) {
         updateSmoothedPoints(
-            landmarks.map { PointF(it.x, it.y) }, // Use x,y from SavedLandmark
+            landmarks.map { PointF(it.x, it.y) },
             ghostSmoothedPoints,
-            null, // No likelihood for saved data
+            null,
             width,
             height,
             isGhost = true
@@ -56,7 +73,6 @@ class PoseOverlayView(context: Context, attrs: AttributeSet?) : View(context, at
         val scaleY = viewHeight.toFloat() / imageHeight.toFloat()
 
         rawPoints.forEachIndexed { index, point ->
-            // For live poses, only draw points with good confidence
             if (!isGhost && (likelihoods == null || likelihoods[index] < 0.3f)) {
                 smoothedPoints.remove(index)
                 return@forEachIndexed
@@ -80,48 +96,45 @@ class PoseOverlayView(context: Context, attrs: AttributeSet?) : View(context, at
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        // Draw the ghost pose first, so the live pose is on top
-        drawPose(canvas, ghostSmoothedPoints, true)
-        drawPose(canvas, liveSmoothedPoints, false)
+        drawHumanoid(canvas, ghostSmoothedPoints, true)
+        drawHumanoid(canvas, liveSmoothedPoints, false)
     }
 
-    private fun drawPose(canvas: Canvas, points: Map<Int, PointF>, isGhost: Boolean) {
+    private fun drawHumanoid(canvas: Canvas, points: Map<Int, PointF>, isGhost: Boolean) {
         if (points.isEmpty()) return
 
-        val jointPaint = Paint().apply {
-            color = if (isGhost) Color.GRAY else Color.WHITE
-            style = Paint.Style.FILL
-            isAntiAlias = true
-        }
+        val paint = if (isGhost) ghostPaint else livePaint
+        val limbWidth = if (isGhost) 15f else 30f
+        limbPaint.strokeWidth = limbWidth
 
-        val linePaint = Paint().apply {
-            strokeWidth = if (isGhost) 8f else 16f
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            isAntiAlias = true
-        }
-
-        for ((startType, endType) in POSE_CONNECTIONS) {
+        // Draw Limbs
+        for ((startType, endType) in LIMB_CONNECTIONS) {
             val start = points[startType] ?: continue
             val end = points[endType] ?: continue
-
-            linePaint.color = if (isGhost) {
-                Color.DKGRAY
-            } else {
-                when (BODY_PARTS[startType to endType] ?: "") {
-                    "HEAD" -> Color.MAGENTA
-                    "LEFT_ARM", "RIGHT_ARM" -> Color.RED
-                    "TRUNK" -> Color.CYAN
-                    "LEFT_LEG", "RIGHT_LEG" -> Color.GREEN
-                    else -> Color.YELLOW
-                }
-            }
-
-            canvas.drawLine(start.x, start.y, end.x, end.y, linePaint)
+            limbPaint.color = paint.color
+            canvas.drawLine(start.x, start.y, end.x, end.y, limbPaint)
         }
 
-        for ((_, point) in points) {
-            canvas.drawCircle(point.x, point.y, if (isGhost) 10f else 20f, jointPaint)
+        // Draw Torso
+        val torsoPath = Path()
+        val leftShoulder = points[PoseLandmark.LEFT_SHOULDER]
+        val rightShoulder = points[PoseLandmark.RIGHT_SHOULDER]
+        val leftHip = points[PoseLandmark.LEFT_HIP]
+        val rightHip = points[PoseLandmark.RIGHT_HIP]
+
+        if (leftShoulder != null && rightShoulder != null && leftHip != null && rightHip != null) {
+            torsoPath.moveTo(leftShoulder.x, leftShoulder.y)
+            torsoPath.lineTo(rightShoulder.x, rightShoulder.y)
+            torsoPath.lineTo(rightHip.x, rightHip.y)
+            torsoPath.lineTo(leftHip.x, leftHip.y)
+            torsoPath.close()
+            canvas.drawPath(torsoPath, paint)
+        }
+
+        // Draw Head
+        points[PoseLandmark.NOSE]?.let {
+            val headRadius = limbWidth * 1.5f
+            canvas.drawCircle(it.x, it.y, headRadius, paint)
         }
     }
 
@@ -135,12 +148,7 @@ class PoseOverlayView(context: Context, attrs: AttributeSet?) : View(context, at
     }
 
     companion object {
-        // Note: The indices for the points map correspond to the PoseLandmark types
-        val POSE_CONNECTIONS = listOf(
-            PoseLandmark.LEFT_SHOULDER to PoseLandmark.RIGHT_SHOULDER,
-            PoseLandmark.LEFT_SHOULDER to PoseLandmark.LEFT_HIP,
-            PoseLandmark.RIGHT_SHOULDER to PoseLandmark.RIGHT_HIP,
-            PoseLandmark.LEFT_HIP to PoseLandmark.RIGHT_HIP,
+        val LIMB_CONNECTIONS = listOf(
             PoseLandmark.LEFT_SHOULDER to PoseLandmark.LEFT_ELBOW,
             PoseLandmark.LEFT_ELBOW to PoseLandmark.LEFT_WRIST,
             PoseLandmark.RIGHT_SHOULDER to PoseLandmark.RIGHT_ELBOW,
@@ -148,32 +156,7 @@ class PoseOverlayView(context: Context, attrs: AttributeSet?) : View(context, at
             PoseLandmark.LEFT_HIP to PoseLandmark.LEFT_KNEE,
             PoseLandmark.LEFT_KNEE to PoseLandmark.LEFT_ANKLE,
             PoseLandmark.RIGHT_HIP to PoseLandmark.RIGHT_KNEE,
-            PoseLandmark.RIGHT_KNEE to PoseLandmark.RIGHT_ANKLE,
-            PoseLandmark.NOSE to PoseLandmark.LEFT_EYE,
-            PoseLandmark.NOSE to PoseLandmark.RIGHT_EYE,
-            PoseLandmark.LEFT_EYE to PoseLandmark.RIGHT_EYE,
-            PoseLandmark.LEFT_EYE to PoseLandmark.LEFT_EAR,
-            PoseLandmark.RIGHT_EYE to PoseLandmark.RIGHT_EAR
-        )
-
-        val BODY_PARTS = mapOf(
-            (PoseLandmark.LEFT_SHOULDER to PoseLandmark.RIGHT_SHOULDER) to "TRUNK",
-            (PoseLandmark.LEFT_SHOULDER to PoseLandmark.LEFT_HIP) to "TRUNK",
-            (PoseLandmark.RIGHT_SHOULDER to PoseLandmark.RIGHT_HIP) to "TRUNK",
-            (PoseLandmark.LEFT_HIP to PoseLandmark.RIGHT_HIP) to "TRUNK",
-            (PoseLandmark.LEFT_SHOULDER to PoseLandmark.LEFT_ELBOW) to "LEFT_ARM",
-            (PoseLandmark.LEFT_ELBOW to PoseLandmark.LEFT_WRIST) to "LEFT_ARM",
-            (PoseLandmark.RIGHT_SHOULDER to PoseLandmark.RIGHT_ELBOW) to "RIGHT_ARM",
-            (PoseLandmark.RIGHT_ELBOW to PoseLandmark.RIGHT_WRIST) to "RIGHT_ARM",
-            (PoseLandmark.LEFT_HIP to PoseLandmark.LEFT_KNEE) to "LEFT_LEG",
-            (PoseLandmark.LEFT_KNEE to PoseLandmark.LEFT_ANKLE) to "LEFT_LEG",
-            (PoseLandmark.RIGHT_HIP to PoseLandmark.RIGHT_KNEE) to "RIGHT_LEG",
-            (PoseLandmark.RIGHT_KNEE to PoseLandmark.RIGHT_ANKLE) to "RIGHT_LEG",
-            (PoseLandmark.NOSE to PoseLandmark.LEFT_EYE) to "HEAD",
-            (PoseLandmark.NOSE to PoseLandmark.RIGHT_EYE) to "HEAD",
-            (PoseLandmark.LEFT_EYE to PoseLandmark.RIGHT_EYE) to "HEAD",
-            (PoseLandmark.LEFT_EYE to PoseLandmark.LEFT_EAR) to "HEAD",
-            (PoseLandmark.RIGHT_EYE to PoseLandmark.RIGHT_EAR) to "HEAD"
+            PoseLandmark.RIGHT_KNEE to PoseLandmark.RIGHT_ANKLE
         )
     }
 }

@@ -98,7 +98,6 @@ class RecordingFragment : Fragment() {
         recordedPoses.clear()
         Log.d("RecordingFragment", "Recording started")
 
-        // Stop recording after 10 seconds
         view?.postDelayed({
             stopRecording(button)
         }, 10000)
@@ -111,7 +110,7 @@ class RecordingFragment : Fragment() {
 
         val savedPoses = recordedPoses.map { pose ->
             val savedLandmarks = pose.landmarks.map { lm ->
-                CameraFragment.SavedLandmark(lm.landmarkType, lm.position3D.x, lm.position3D.y, lm.position3D.z)
+                CameraFragment.SavedLandmark(lm.landmarkType, lm.position3D.x, lm.position3D.y, lm.position3D.z, lm.inFrameLikelihood)
             }
             CameraFragment.SavedPose(savedLandmarks, pose.frameWidth, pose.frameHeight)
         }
@@ -182,12 +181,10 @@ class RecordingFragment : Fragment() {
         val gson = Gson()
         val json = gson.toJson(poses)
 
-        // Save to internal storage (for the app to use)
         val internalFile = File(requireContext().filesDir, filename)
         internalFile.writeText(json)
         Log.d("RecordingFragment", "Saved ${poses.size} poses to ${internalFile.absolutePath}")
 
-        // Save a copy to public Downloads directory
         try {
             val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             val externalFile = File(downloadsDir, "lesson_1_master_copy.json")
